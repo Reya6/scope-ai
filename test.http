@@ -1,0 +1,8 @@
+POST http://localhost:3000/api/simulate
+Content-Type: application/json
+
+{
+  "subject": "Hey 50% off",
+  "body": "Grab your deal now",
+  "audience": "SaaS founders"
+}
