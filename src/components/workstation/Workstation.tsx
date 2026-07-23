@@ -100,7 +100,7 @@ export default function Workstation() {
             const { data, error } = await supabase
               .from(table)
               .select("*")
-              .order("timestamp", { ascending: false })
+              .order("created_at", { ascending: false })
               .limit(200);
             if (error) {
               // table might not exist — continue to next
@@ -121,12 +121,14 @@ export default function Workstation() {
         // Normalize remote rows to SavedSim shape and merge with local (prefer latest timestamp)
         const normalized = remoteData.map((r: any) => ({
           id: r.id,
-          subject: r.subject ?? r.title ?? "",
-          body: r.body ?? r.content ?? "",
-          persona: r.persona ?? r.audience ?? "",
-          numVariants: r.num_variants ?? r.numVariants ?? 1,
-          result: r.result ?? r.data ?? null,
-          timestamp: r.timestamp ?? Date.now(),
+          subject: r.subject ?? "",
+          body: r.body ?? "",
+          persona: r.persona ?? "",
+          numVariants: r.num_variants ?? 1,
+          result: r.result ?? null,
+          timestamp: r.created_at
+            ? new Date(r.created_at).getTime()
+            : Date.now(),
           synced: true,
         })) as SavedSim[];
 
@@ -139,7 +141,7 @@ export default function Workstation() {
         });
 
         const merged = Array.from(map.values()).sort(
-          (a, b) => b.timestamp - a.timestamp
+          (a, b) => b.timestamp - a.timestamp,
         );
         setSaved(merged);
       } catch (err) {
@@ -179,12 +181,9 @@ export default function Workstation() {
                   subject: savedItem.subject,
                   body: savedItem.body,
                   persona: savedItem.persona,
-                  num_variants:
-                    (savedItem as any).num_variants ??
-                    savedItem.numVariants ??
-                    1,
+                  num_variants: savedItem.numVariants ?? 1,
                   result: savedItem.result,
-                  timestamp: savedItem.timestamp,
+                  created_at: new Date(savedItem.timestamp).toISOString(),
                 },
               ]);
               if (!error) break;
@@ -206,7 +205,7 @@ export default function Workstation() {
   async function deleteSim(id: string) {
     try {
       const remaining = (Array.isArray(saved) ? saved : []).filter(
-        (s) => s.id !== id
+        (s) => s.id !== id,
       );
       setSaved(remaining);
       localStorage.setItem("simulations", JSON.stringify(remaining));
@@ -250,7 +249,7 @@ export default function Workstation() {
       setResult(data);
       setTimeout(
         () => topRef.current?.scrollIntoView({ behavior: "smooth" }),
-        80
+        80,
       );
     } catch (e: any) {
       console.error(e);
@@ -317,7 +316,7 @@ export default function Workstation() {
   const filteredSims = (Array.isArray(saved) ? saved : []).filter(
     (s) =>
       (s.subject ?? "").toLowerCase().includes(search.toLowerCase()) ||
-      (s.persona ?? "").toLowerCase().includes(search.toLowerCase())
+      (s.persona ?? "").toLowerCase().includes(search.toLowerCase()),
   );
 
   // ---------- Invite helpers (MINIMAL changes only) ----------
@@ -703,7 +702,7 @@ export default function Workstation() {
                         <button
                           onClick={() =>
                             navigator.clipboard?.writeText(
-                              `Subject: ${v.subject}\n\n${v.body}`
+                              `Subject: ${v.subject}\n\n${v.body}`,
                             )
                           }
                           className="px-3 py-2 bg-white/10 text-white rounded hover:bg-white/20"
