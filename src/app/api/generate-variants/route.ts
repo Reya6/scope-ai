@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY!,
 });
 
 export async function POST(req: Request) {
@@ -12,29 +12,42 @@ export async function POST(req: Request) {
     const prompt = `
 You are an expert direct-response email copywriter who creates A/B test variants that genuinely improve conversion potential.
 
-Generate ${variantCount} unique, high-performing variants of this campaign:
+Generate ${variantCount} unique, high-performing variants of this campaign.
 
 Subject: ${subject}
-Body: ${body}
-Persona: ${persona}
 
-Return ONLY pure JSON in this exact format:
+Body:
+${body}
+
+Persona:
+${persona}
+
+Return ONLY valid JSON in exactly this format:
+
 {
   "variants": [
-    { "name": "Variant A", "subject": "Improved subject line here", "body": "Improved email body here" },
-    { "name": "Variant B", "subject": "Another high-performing subject line", "body": "Different but related email body" }
+    {
+      "name": "Variant A",
+      "subject": "Improved subject line here",
+      "body": "Improved email body here"
+    },
+    {
+      "name": "Variant B",
+      "subject": "Another high-performing subject line",
+      "body": "Different but related email body"
+    }
   ]
 }
 `;
 
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-      temperature: 0.8,
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
     });
 
-    const json = JSON.parse(completion.choices[0].message.content || "{}");
+    const text = response.text ?? "";
+
+    const json = JSON.parse(text);
 
     return NextResponse.json({
       success: true,
@@ -42,9 +55,13 @@ Return ONLY pure JSON in this exact format:
     });
   } catch (err) {
     console.error("Variant generation error:", err);
+
     return NextResponse.json(
-      { success: false, error: "Variant generation failed" },
-      { status: 500 }
+      {
+        success: false,
+        error: "Variant generation failed",
+      },
+      { status: 500 },
     );
   }
 }
