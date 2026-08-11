@@ -1,16 +1,61 @@
 "use client";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+
+import { useEffect, useState } from "react";
+import { initializePaddle, Paddle } from "@paddle/paddle-js";
+
+const PADDLE_PRICE_ID = "pri_01kzh8jmf33yg6ek3qk656h0fe";
 
 export default function Payment4Month() {
-  const router = useRouter();
+  const [paddle, setPaddle] = useState<Paddle | undefined>();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const token = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
+
+    if (!token) {
+      setError("Paddle configuration is missing.");
+      return;
+    }
+
+    initializePaddle({
+      environment: "sandbox",
+      token,
+    })
+      .then((paddleInstance) => {
+        if (paddleInstance) {
+          setPaddle(paddleInstance);
+        }
+      })
+      .catch((err) => {
+        console.error("Paddle initialization error:", err);
+        setError("Unable to initialize payment. Please try again.");
+      });
+  }, []);
 
   const handlePayment = () => {
+    if (!paddle) {
+      setError("Payment system is still loading. Please try again.");
+      return;
+    }
+
+    setError("");
     setLoading(true);
-    setTimeout(() => {
-      router.push("/dashboard");
-    }, 1200);
+
+    try {
+      paddle.Checkout.open({
+        items: [
+          {
+            priceId: PADDLE_PRICE_ID,
+            quantity: 1,
+          },
+        ],
+      });
+    } catch (err) {
+      console.error("Paddle checkout error:", err);
+      setError("Unable to open payment checkout. Please try again.");
+      setLoading(false);
+    }
   };
 
   return (
@@ -19,15 +64,21 @@ export default function Payment4Month() {
         <h1 className="text-3xl font-extrabold mb-4 h-montserrat text-black">
           4-Month Enterprise Plan
         </h1>
+
         <p className="text-gray-700 font-mono mb-6">
           Access everything for 4 months.
         </p>
+
+        {error && (
+          <p className="text-red-600 font-bold mb-4 text-sm">{error}</p>
+        )}
+
         <button
           onClick={handlePayment}
-          disabled={loading}
+          disabled={loading || !paddle}
           className="w-full bg-black text-white font-extrabold py-3 rounded-[3px] hover:opacity-90 transition disabled:opacity-50"
         >
-          {loading ? "Processing..." : "Proceed to Payment"}
+          {loading ? "Opening Checkout..." : "Proceed to Payment"}
         </button>
       </div>
     </section>
