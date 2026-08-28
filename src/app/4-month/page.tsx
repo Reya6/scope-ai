@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { initializePaddle, Paddle } from "@paddle/paddle-js";
-
-const PADDLE_PRICE_ID = "pri_01kzh8jmf33yg6ek3qk656h0fe";
+import { supabase } from "@/lib/supabaseClient";
+import { PADDLE_PRICES } from "@/lib/paddle";
 
 export default function Payment4Month() {
   const [paddle, setPaddle] = useState<Paddle | undefined>();
@@ -33,7 +33,7 @@ export default function Payment4Month() {
       });
   }, []);
 
-  const handlePayment = () => {
+  const handlePayment = async () => {
     if (!paddle) {
       setError("Payment system is still loading. Please try again.");
       return;
@@ -43,17 +43,55 @@ export default function Payment4Month() {
     setLoading(true);
 
     try {
+      // Get the currently signed-in user
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.user) {
+        setError("Please sign in before making a payment.");
+        setLoading(false);
+        return;
+      }
+
+      // Create the pending billing record before opening Paddle
+      const billingResponse = await fetch("/api/paddle/create-billing", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: session.user.id,
+          plan: "4-month",
+        }),
+      });
+
+      const billingData = await billingResponse.json();
+
+      if (!billingResponse.ok || !billingData.success) {
+        throw new Error(billingData.error || "Failed to prepare billing.");
+      }
+
+      // Open Paddle checkout
       paddle.Checkout.open({
         items: [
           {
-            priceId: PADDLE_PRICE_ID,
+            priceId: PADDLE_PRICES["4-month"],
             quantity: 1,
           },
         ],
       });
+
+      setLoading(false);
     } catch (err) {
       console.error("Paddle checkout error:", err);
-      setError("Unable to open payment checkout. Please try again.");
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to open payment checkout. Please try again.",
+      );
+
       setLoading(false);
     }
   };
