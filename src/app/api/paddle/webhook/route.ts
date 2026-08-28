@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Paddle } from "@paddle/paddle-node-sdk";
+
 import supabaseAdmin from "@/lib/supabaseAdmin";
 
 const paddle = new Paddle(process.env.PADDLE_API_KEY || "");
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Verify the webhook and parse the event.
+    // Verify the Paddle webhook.
     const event = await paddle.webhooks.unmarshal(
       rawBody,
       secretKey,
@@ -68,12 +69,20 @@ export async function POST(request: Request) {
       });
     }
 
-    // Store the verified Paddle event.
     const eventData = event.data as {
       id?: string;
       subscriptionId?: string;
+      customerId?: string;
+      customData?: {
+        billingId?: string;
+      } | null;
+      billingPeriod?: {
+        startsAt?: string;
+        endsAt?: string;
+      } | null;
     };
 
+    // Store the verified Paddle event first.
     const { error: eventError } = await supabaseAdmin
       .from("billing_events")
       .insert({
@@ -92,6 +101,108 @@ export async function POST(request: Request) {
         { error: "Failed to store billing event" },
         { status: 500 },
       );
+    }
+
+    // Only activate the account after a completed transaction.
+    if (eventType === "transaction.completed") {
+      const billingId = eventData?.customData?.billingId;
+
+      if (!billingId) {
+        console.error(
+          "transaction.completed received without customData.billingId",
+        );
+
+        return NextResponse.json(
+          {
+            error: "Missing billing ID in Paddle transaction",
+          },
+          { status: 400 },
+        );
+      }
+
+      const { data: billing, error: billingLookupError } = await supabaseAdmin
+        .from("billing_accounts")
+        .select("id, company_id, plan, status")
+        .eq("id", billingId)
+        .maybeSingle();
+
+      if (billingLookupError) {
+        console.error("Failed to find billing account:", billingLookupError);
+
+        return NextResponse.json(
+          { error: "Failed to find billing account" },
+          { status: 500 },
+        );
+      }
+
+      if (!billing) {
+        console.error("Billing account not found:", billingId);
+
+        return NextResponse.json(
+          { error: "Billing account not found" },
+          { status: 404 },
+        );
+      }
+
+      // Activate the billing account.
+      const { error: updateBillingError } = await supabaseAdmin
+        .from("billing_accounts")
+        .update({
+          status: "active",
+          paddle_transaction_id: eventData?.id ?? null,
+          paddle_subscription_id: eventData?.subscriptionId ?? null,
+          paddle_customer_id: eventData?.customerId ?? null,
+          started_at:
+            eventData?.billingPeriod?.startsAt ?? new Date().toISOString(),
+          expires_at: eventData?.billingPeriod?.endsAt ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", billingId);
+
+      if (updateBillingError) {
+        console.error(
+          "Failed to activate billing account:",
+          updateBillingError,
+        );
+
+        return NextResponse.json(
+          { error: "Failed to activate billing account" },
+          { status: 500 },
+        );
+      }
+
+      console.log(
+        `Billing account ${billingId} activated successfully for ${billing.plan}`,
+      );
+
+      // Mark the event as processed.
+      const { error: processedError } = await supabaseAdmin
+        .from("billing_events")
+        .update({ processed: true })
+        .eq("paddle_event_id", eventId);
+
+      if (processedError) {
+        console.error(
+          "Billing activated, but failed to mark event processed:",
+          processedError,
+        );
+
+        return NextResponse.json(
+          {
+            success: true,
+            received: eventType,
+            warning: "Billing activated but event was not marked processed",
+          },
+          { status: 200 },
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        received: eventType,
+        billingId,
+        status: "active",
+      });
     }
 
     return NextResponse.json({

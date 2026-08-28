@@ -72,7 +72,6 @@ export default function Payment4Month() {
         throw new Error(billingData.error || "Failed to prepare billing.");
       }
 
-      // Open Paddle checkout
       paddle.Checkout.open({
         items: [
           {
@@ -80,8 +79,10 @@ export default function Payment4Month() {
             quantity: 1,
           },
         ],
+        customData: {
+          billingId: billingData.billingId,
+        },
       });
-
       setLoading(false);
     } catch (err) {
       console.error("Paddle checkout error:", err);
