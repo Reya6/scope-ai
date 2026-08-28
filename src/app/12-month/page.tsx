@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+
 import { initializePaddle, Paddle } from "@paddle/paddle-js";
+
+import { supabase } from "@/lib/supabaseClient";
 import { PADDLE_PRICES } from "@/lib/paddle";
 
 export default function Payment12Month() {
@@ -32,7 +35,7 @@ export default function Payment12Month() {
       });
   }, []);
 
-  const handlePayment = () => {
+  const handlePayment = async () => {
     if (!paddle) {
       setError("Payment system is still loading. Please try again.");
       return;
@@ -42,6 +45,33 @@ export default function Payment12Month() {
     setLoading(true);
 
     try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.user) {
+        setError("Please sign in before making a payment.");
+        setLoading(false);
+        return;
+      }
+
+      const billingResponse = await fetch("/api/paddle/create-billing", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: session.user.id,
+          plan: "12-month",
+        }),
+      });
+
+      const billingData = await billingResponse.json();
+
+      if (!billingResponse.ok || !billingData.success) {
+        throw new Error(billingData.error || "Failed to prepare billing.");
+      }
+
       paddle.Checkout.open({
         items: [
           {
@@ -49,10 +79,21 @@ export default function Payment12Month() {
             quantity: 1,
           },
         ],
+        customData: {
+          billingId: billingData.billingId,
+        },
       });
+
+      setLoading(false);
     } catch (err) {
       console.error("Paddle checkout error:", err);
-      setError("Unable to open payment checkout. Please try again.");
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to open payment checkout. Please try again.",
+      );
+
       setLoading(false);
     }
   };
@@ -65,7 +106,7 @@ export default function Payment12Month() {
         </h1>
 
         <p className="text-gray-700 font-mono mb-6">
-          Enjoy full access to all features for 12 months.
+          Get enterprise-level tools for 12 months.
         </p>
 
         {error && (
