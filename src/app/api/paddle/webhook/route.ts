@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { Paddle } from "@paddle/paddle-node-sdk";
 
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { getPlanTokenAllocation } from "@/lib/tokens/config";
 
 const paddle = new Paddle(process.env.PADDLE_API_KEY || "");
 
@@ -27,17 +28,17 @@ export async function POST(request: Request) {
       );
     }
 
-    // Verify the Paddle webhook.
+    // Verify the webhook using the raw request body.
     const event = await paddle.webhooks.unmarshal(
       rawBody,
       secretKey,
       signature,
     );
 
-    console.log("Verified Paddle webhook:", event.eventType);
-
     const eventId = event.eventId;
     const eventType = event.eventType;
+
+    console.log("Verified Paddle webhook:", eventType, eventId);
 
     if (!eventId || !eventType) {
       return NextResponse.json(
@@ -46,10 +47,16 @@ export async function POST(request: Request) {
       );
     }
 
-    // Prevent duplicate processing.
+    /*
+     * Check whether this exact Paddle event has already been processed.
+     *
+     * If it exists and processed=true, safely acknowledge the duplicate.
+     * If it exists but processed=false, continue processing it because a
+     * previous attempt may have failed halfway through.
+     */
     const { data: existingEvent, error: lookupError } = await supabaseAdmin
       .from("billing_events")
-      .select("id")
+      .select("id, processed")
       .eq("paddle_event_id", eventId)
       .maybeSingle();
 
@@ -62,7 +69,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (existingEvent) {
+    if (existingEvent?.processed) {
       return NextResponse.json({
         success: true,
         message: "Event already processed",
@@ -82,28 +89,37 @@ export async function POST(request: Request) {
       } | null;
     };
 
-    // Store the verified Paddle event first.
-    const { error: eventError } = await supabaseAdmin
-      .from("billing_events")
-      .insert({
-        paddle_event_id: eventId,
-        event_type: eventType,
-        transaction_id: eventData?.id ?? null,
-        subscription_id: eventData?.subscriptionId ?? null,
-        payload: event,
-        processed: false,
-      });
+    /*
+     * Store the verified event.
+     *
+     * If this is a retry of an existing unprocessed event, the existing
+     * billing_events row is reused.
+     */
+    if (!existingEvent) {
+      const { error: eventError } = await supabaseAdmin
+        .from("billing_events")
+        .insert({
+          paddle_event_id: eventId,
+          event_type: eventType,
+          transaction_id: eventData?.id ?? null,
+          subscription_id: eventData?.subscriptionId ?? null,
+          payload: event,
+          processed: false,
+        });
 
-    if (eventError) {
-      console.error("Failed to store Paddle event:", eventError);
+      if (eventError) {
+        console.error("Failed to store Paddle event:", eventError);
 
-      return NextResponse.json(
-        { error: "Failed to store billing event" },
-        { status: 500 },
-      );
+        return NextResponse.json(
+          { error: "Failed to store billing event" },
+          { status: 500 },
+        );
+      }
     }
 
-    // Only activate the account after a completed transaction.
+    /*
+     * Provision tokens when Paddle reports transaction.completed.
+     */
     if (eventType === "transaction.completed") {
       const billingId = eventData?.customData?.billingId;
 
@@ -120,14 +136,18 @@ export async function POST(request: Request) {
         );
       }
 
+      // Find the billing account created before checkout.
       const { data: billing, error: billingLookupError } = await supabaseAdmin
         .from("billing_accounts")
-        .select("id, company_id, plan, status")
+        .select("id, company_id, owner_id, plan, status")
         .eq("id", billingId)
         .maybeSingle();
 
       if (billingLookupError) {
-        console.error("Failed to find billing account:", billingLookupError);
+        console.error(
+          "Failed to find billing account:",
+          billingLookupError,
+        );
 
         return NextResponse.json(
           { error: "Failed to find billing account" },
@@ -144,7 +164,12 @@ export async function POST(request: Request) {
         );
       }
 
-      // Activate the billing account.
+      // Get the token allocation for this subscription plan.
+      const tokenAllocation = getPlanTokenAllocation(billing.plan);
+
+      /*
+       * Activate the billing account.
+       */
       const { error: updateBillingError } = await supabaseAdmin
         .from("billing_accounts")
         .update({
@@ -171,11 +196,86 @@ export async function POST(request: Request) {
         );
       }
 
+      /*
+       * Keep enterprise_accounts.plan synchronized with the paid plan.
+       */
+      const { error: companyPlanError } = await supabaseAdmin
+        .from("enterprise_accounts")
+        .update({
+          plan: billing.plan,
+        })
+        .eq("id", billing.company_id);
+
+      if (companyPlanError) {
+        console.error(
+          "Failed to update enterprise account plan:",
+          companyPlanError,
+        );
+
+        return NextResponse.json(
+          { error: "Failed to update company plan" },
+          { status: 500 },
+        );
+      }
+
+      /*
+       * Grant the company's shared Scope AI token wallet.
+       *
+       * The company receives:
+       * 4-month  -> 40,000
+       * 6-month  -> 60,000
+       * 9-month  -> 85,500
+       * 12-month -> 108,000
+       *
+       * The database function also records the grant in
+       * token_transactions and protects against duplicate grants.
+       */
+      const { data: tokenResult, error: tokenError } =
+        await supabaseAdmin.rpc("grant_scope_tokens", {
+          p_company_id: billing.company_id,
+          p_tokens: tokenAllocation.totalTokens,
+          p_ai_budget_usd:
+            (tokenAllocation.priceUsd * tokenAllocation.aiBudgetPercent) /
+            100,
+          p_expires_at: eventData?.billingPeriod?.endsAt ?? null,
+          p_reference_id: eventData?.id ?? eventId,
+          p_user_id: billing.owner_id,
+          p_meta: {
+            billingId: billing.id,
+            paddleEventId: eventId,
+            paddleTransactionId: eventData?.id ?? null,
+            paddleSubscriptionId: eventData?.subscriptionId ?? null,
+            plan: billing.plan,
+            priceUsd: tokenAllocation.priceUsd,
+            aiBudgetPercent: tokenAllocation.aiBudgetPercent,
+            totalTokens: tokenAllocation.totalTokens,
+          },
+        });
+
+      if (tokenError) {
+        console.error(
+          "Failed to grant Scope AI tokens:",
+          tokenError,
+        );
+
+        return NextResponse.json(
+          { error: "Failed to allocate Scope AI tokens" },
+          { status: 500 },
+        );
+      }
+
       console.log(
-        `Billing account ${billingId} activated successfully for ${billing.plan}`,
+        `Token grant result for company ${billing.company_id}:`,
+        tokenResult,
       );
 
-      // Mark the event as processed.
+      /*
+       * Mark the Paddle event fully processed only after:
+       * 1. Billing is active
+       * 2. Company plan is updated
+       * 3. Tokens are allocated
+       * 4. Token grant is recorded by the RPC
+       */
       const { error: processedError } = await supabaseAdmin
         .from("billing_events")
         .update({ processed: true })
@@ -183,7 +283,7 @@ export async function POST(request: Request) {
 
       if (processedError) {
         console.error(
-          "Billing activated, but failed to mark event processed:",
+          "Billing/token grant succeeded, but event could not be marked processed:",
           processedError,
         );
 
@@ -191,20 +291,35 @@ export async function POST(request: Request) {
           {
             success: true,
             received: eventType,
-            warning: "Billing activated but event was not marked processed",
+            warning:
+              "Payment and token allocation succeeded, but event status update failed.",
           },
           { status: 200 },
         );
       }
 
+      console.log(
+        `Payment completed: ${billing.plan} -> ${tokenAllocation.totalTokens} Scope AI tokens granted to company ${billing.company_id}`,
+      );
+
       return NextResponse.json({
         success: true,
         received: eventType,
         billingId,
+        companyId: billing.company_id,
+        plan: billing.plan,
+        tokensGranted: tokenAllocation.totalTokens,
+        aiBudgetUsd:
+          (tokenAllocation.priceUsd * tokenAllocation.aiBudgetPercent) / 100,
+        tokenResult,
         status: "active",
       });
     }
 
+    /*
+     * Other verified Paddle events are accepted for now.
+     * Subscription lifecycle handling will be added separately.
+     */
     return NextResponse.json({
       success: true,
       received: eventType,
