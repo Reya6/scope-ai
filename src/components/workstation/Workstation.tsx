@@ -168,7 +168,7 @@ export default function Workstation() {
 
       const {
         data: { session },
-      } = await supabase.auth.getSession();
+      } = await supabase!.auth.getSession();
 
       if (!session?.access_token) {
         setTokenInfo(null);
