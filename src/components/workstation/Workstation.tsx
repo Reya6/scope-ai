@@ -69,6 +69,16 @@ export default function Workstation() {
   const [inviteCompanyId, setInviteCompanyId] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteMessage, setInviteMessage] = useState<string | null>(null);
+  const [tokenInfo, setTokenInfo] = useState<{
+    total: number;
+    used: number;
+    remaining: number;
+    aiBudgetTotal: number;
+    aiSpent: number;
+    aiRemaining: number;
+    expiresAt: string | null;
+  } | null>(null);
+  const [tokenLoading, setTokenLoading] = useState(true);
 
   const topRef = useRef<HTMLDivElement | null>(null);
 
@@ -151,7 +161,56 @@ export default function Workstation() {
     loadRemote();
   }, []);
 
-  // Save current simulation — handles both sync and async saveSimulation implementations
+  // Load Scope AI token information
+  async function loadTokenInfo() {
+    try {
+      setTokenLoading(true);
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        setTokenInfo(null);
+        return;
+      }
+
+      const response = await fetch("/api/tokens", {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        console.error("Failed to load token information:", data.error);
+        setTokenInfo(null);
+        return;
+      }
+
+      setTokenInfo({
+        total: data.tokens.total,
+        used: data.tokens.used,
+        remaining: data.tokens.remaining,
+        aiBudgetTotal: data.aiBudget.totalUsd,
+        aiSpent: data.aiBudget.spentUsd,
+        aiRemaining: data.aiBudget.remainingUsd,
+        expiresAt: data.expiresAt,
+      });
+    } catch (err) {
+      console.error("Failed to load token information:", err);
+      setTokenInfo(null);
+    } finally {
+      setTokenLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTokenInfo();
+  }, []);
+
+  // Save current simulation
   async function saveCurrentSim() {
     if (!result) return;
     try {
@@ -226,15 +285,32 @@ export default function Workstation() {
     }
   }
 
-  // Run simulation (unchanged)
+  // Run simulation
   async function runSim() {
     setError(null);
     setLoading(true);
     setResult(null);
+
     try {
+      // FIX: make sure Supabase exists before using .auth
+      if (!supabase) {
+        throw new Error("Supabase is not initialized.");
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("You must be logged in to run a simulation.");
+      }
+
       const res = await fetch("/api/simulate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({
           subject,
           body,
@@ -243,10 +319,17 @@ export default function Workstation() {
           numVariants,
         }),
       });
-      if (!res.ok) throw new Error(`Simulation failed (${res.status})`);
+
       const json = await res.json();
+
+      if (!res.ok) {
+        throw new Error(json?.error ?? `Simulation failed (${res.status})`);
+      }
+
       const data = json?.result ?? json;
+
       setResult(data);
+      await loadTokenInfo();
       setTimeout(
         () => topRef.current?.scrollIntoView({ behavior: "smooth" }),
         80,
@@ -514,6 +597,55 @@ export default function Workstation() {
           showMemory ? "ml-72" : ""
         }`}
       >
+        {" "}
+        {/* Scope Token Usage */}
+        <div className="mb-6 p-4 bg-black/40 border border-white/10 rounded-xl">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-lg font-bold text-white">Scope Tokens</h3>
+              <p className="text-xs text-gray-400">
+                Company / team token usage
+              </p>
+            </div>
+
+            {tokenInfo?.expiresAt && (
+              <p className="text-xs text-gray-400">
+                Expires {new Date(tokenInfo.expiresAt).toLocaleDateString()}
+              </p>
+            )}
+          </div>
+
+          {tokenLoading ? (
+            <p className="text-sm text-gray-400">Loading...</p>
+          ) : tokenInfo ? (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-white/5 rounded-lg p-3">
+                <p className="text-xs text-gray-400">Remaining</p>
+                <p className="text-xl font-bold text-white">
+                  {tokenInfo.remaining.toLocaleString()}
+                </p>
+              </div>
+
+              <div className="bg-white/5 rounded-lg p-3">
+                <p className="text-xs text-gray-400">Used</p>
+                <p className="text-xl font-bold text-white">
+                  {tokenInfo.used.toLocaleString()}
+                </p>
+              </div>
+
+              <div className="bg-white/5 rounded-lg p-3">
+                <p className="text-xs text-gray-400">Total</p>
+                <p className="text-xl font-bold text-white">
+                  {tokenInfo.total.toLocaleString()}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">
+              Token information is currently unavailable.
+            </p>
+          )}
+        </div>
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-2xl md:text-3xl font-extrabold text-white">
             Campaign Workstation
@@ -537,7 +669,6 @@ export default function Workstation() {
             </button>
           </div>
         </div>
-
         {/* Inputs */}
         <div className="space-y-3">
           <input
@@ -580,7 +711,6 @@ export default function Workstation() {
           </div>
           {error && <div className="text-red-400 mt-2">{error}</div>}
         </div>
-
         {/* Results */}
         {result && (
           <div className="mt-8 space-y-6">
@@ -640,7 +770,6 @@ export default function Workstation() {
             ) : null}
           </div>
         )}
-
         {/* Variant Generator */}
         <div
           id="variant-section"
