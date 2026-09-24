@@ -82,6 +82,9 @@ export default function Payment4Month() {
         customData: {
           billingId: billingData.billingId,
         },
+        settings: {
+          successUrl: `${window.location.origin}/payment-success`,
+        },
       });
       setLoading(false);
     } catch (err) {

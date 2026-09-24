@@ -16,7 +16,7 @@ export default function SignupPage() {
   useEffect(() => {
     const checkSession = async () => {
       const { data } = await supabase.auth.getSession();
-      if (data.session) router.push("/workstation");
+      if (data.session) router.push("/dashboard");
     };
     checkSession();
   }, [router]);
@@ -53,7 +53,7 @@ export default function SignupPage() {
         // 🚫 If the user already exists
         if (error.message.includes("User already registered")) {
           setMessage(
-            "⚠️ This email is already registered. Redirecting to login..."
+            "⚠️ This email is already registered. Redirecting to login...",
           );
           setTimeout(() => router.push("/workstation2"), 2000);
         } else {
@@ -64,7 +64,7 @@ export default function SignupPage() {
 
       // ✅ Success — show confirmation message
       setMessage(
-        "✅ Check your email for a confirmation link to activate your account."
+        "✅ Check your email for a confirmation link to activate your account.",
       );
     } catch (err: any) {
       setMessage("⚠️ Something went wrong. Please try again.");

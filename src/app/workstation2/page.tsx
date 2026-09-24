@@ -15,12 +15,7 @@ export default function LoginPage() {
   // ✅ Ensure code runs only on client and redirect if already logged in
   useEffect(() => {
     setIsClient(true);
-    const checkSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) router.push("/workstation");
-    };
-    checkSession();
-  }, [router]);
+  }, []);
 
   // ✅ Handle Email Login (magic link)
   const handleLogin = async (e: React.FormEvent) => {
