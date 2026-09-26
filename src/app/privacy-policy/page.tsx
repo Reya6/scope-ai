@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 
@@ -7,7 +7,7 @@ export default function LegalPage() {
     <div className="min-h-screen bg-black text-white px-6 py-16 flex justify-center">
       <div className="max-w-3xl w-full">
         <h1 className="text-4xl font-bold text-[#E26D5A] mb-4">
-          Scope AI — Terms & Privacy
+          Scope AI â€” Terms & Privacy
         </h1>
 
         <p className="text-gray-400 mb-10">
@@ -119,7 +119,7 @@ export default function LegalPage() {
 
         <p className="text-gray-300 mb-6">
           Scope AI offers a refund request period of{" "}
-          <strong>5 days from the date of purchase</strong>, subject to
+          <strong>15 days from the date of purchase</strong>, subject to
           applicable law and the terms governing the transaction.
         </p>
 
@@ -329,17 +329,18 @@ export default function LegalPage() {
             href="/workstation"
             className="text-[#E26D5A] hover:underline font-semibold"
           >
-            ← Back to Dashboard
+            â† Back to Dashboard
           </Link>
 
           <Link
             href="/"
             className="text-[#E26D5A] hover:underline font-semibold"
           >
-            ← Back to Homepage
+            â† Back to Homepage
           </Link>
         </div>
       </div>
     </div>
   );
 }
+
