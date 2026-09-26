@@ -7,7 +7,7 @@ export default function LegalPage() {
     <div className="min-h-screen bg-black text-white px-6 py-16 flex justify-center">
       <div className="max-w-3xl w-full">
         <h1 className="text-4xl font-bold text-[#E26D5A] mb-4">
-          Scope AI â€” Terms & Privacy
+          Scope AI Terms & Privacy
         </h1>
 
         <p className="text-gray-400 mb-10">
@@ -329,18 +329,17 @@ export default function LegalPage() {
             href="/workstation"
             className="text-[#E26D5A] hover:underline font-semibold"
           >
-            â† Back to Dashboard
+            Back to Dashboard
           </Link>
 
           <Link
             href="/"
             className="text-[#E26D5A] hover:underline font-semibold"
           >
-            â† Back to Homepage
+            Back to Homepage
           </Link>
         </div>
       </div>
     </div>
   );
 }
-
