@@ -43,3 +43,6 @@ next-env.d.ts
 .vercel
 .env
 .env.*
+
+# private local code backup
+combined_code.txt

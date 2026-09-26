@@ -2,126 +2,127 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 
-/**
- * POST /api/enterprise/invite
- *
- * Body:
- * {
- *   email: string;
- *   companyId?: string;
- *   invitedBy?: string;
- * }
- *
- * Sends a real Supabase invite email and stores the
- * pending enterprise invitation in enterprise_invites.
- */
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const authorization = req.headers.get("Authorization");
 
-    const email = body?.email?.trim();
-    const companyId = body?.companyId?.trim() || null;
-    const invitedBy = body?.invitedBy?.trim() || null;
-
-    if (!email) {
+    if (!authorization?.startsWith("Bearer ")) {
       return NextResponse.json(
-        { success: false, error: "Missing email" },
-        { status: 400 },
+        { success: false, error: "Authentication required." },
+        { status: 401 },
       );
     }
 
-    /*
-     * Find the company.
-     *
-     * Priority:
-     * 1. Use companyId supplied by the client.
-     * 2. Otherwise find the company owned by invitedBy.
-     */
-    let resolvedCompanyId = companyId;
+    const accessToken = authorization.replace("Bearer ", "");
 
-    if (resolvedCompanyId) {
-      const { data: company, error: companyError } = await supabaseAdmin
-        .from("enterprise_accounts")
-        .select("id")
-        .eq("id", resolvedCompanyId)
-        .maybeSingle();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabaseAdmin.auth.getUser(accessToken);
 
-      if (companyError) {
-        console.error("Company lookup error:", companyError);
-
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Unable to verify company.",
-          },
-          { status: 500 },
-        );
-      }
-
-      if (!company) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Company not found.",
-          },
-          { status: 404 },
-        );
-      }
+    if (userError || !user) {
+      return NextResponse.json(
+        { success: false, error: "Invalid authentication." },
+        { status: 401 },
+      );
     }
 
-    if (!resolvedCompanyId && invitedBy) {
-      const { data: company, error: companyError } = await supabaseAdmin
-        .from("enterprise_accounts")
-        .select("id")
-        .eq("owner_id", invitedBy)
-        .limit(1)
-        .maybeSingle();
+    const { data: membership, error: membershipError } = await supabaseAdmin
+      .from("enterprise_users")
+      .select("company_id, role")
+      .eq("user_id", user.id)
+      .maybeSingle();
 
-      if (companyError) {
-        console.error("Owner company lookup error:", companyError);
+    if (membershipError) {
+      console.error("Enterprise membership lookup error:", membershipError);
 
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Unable to find your enterprise account.",
-          },
-          { status: 500 },
-        );
-      }
-
-      if (company) {
-        resolvedCompanyId = company.id;
-      }
-    }
-
-    /*
-     * We need a company before creating an enterprise invitation.
-     */
-    if (!resolvedCompanyId) {
       return NextResponse.json(
         {
           success: false,
-          error:
-            "No company could be determined. Please make sure your enterprise account exists.",
+          error: "Unable to verify your enterprise account.",
         },
+        { status: 500 },
+      );
+    }
+
+    if (!membership) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "You are not a member of an enterprise account.",
+        },
+        { status: 403 },
+      );
+    }
+
+    if (membership.role !== "owner") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Only the company owner can invite team members.",
+        },
+        { status: 403 },
+      );
+    }
+
+    const companyId = membership.company_id;
+
+    const body = await req.json();
+    const email = body?.email?.trim();
+
+    if (!email) {
+      return NextResponse.json(
+        { success: false, error: "Missing email." },
         { status: 400 },
       );
     }
 
-    /*
-     * Generate a unique token for the pending enterprise invite.
-     */
+    const { data: company, error: companyError } = await supabaseAdmin
+      .from("enterprise_accounts")
+      .select("id, owner_id, plan")
+      .eq("id", companyId)
+      .maybeSingle();
+
+    if (companyError) {
+      console.error("Company lookup error:", companyError);
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Unable to verify company.",
+        },
+        { status: 500 },
+      );
+    }
+
+    if (!company) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Enterprise account not found.",
+        },
+        { status: 404 },
+      );
+    }
+
+    if (company.owner_id !== user.id) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "You are not the owner of this enterprise account.",
+        },
+        { status: 403 },
+      );
+    }
+
     const token = randomUUID();
 
-    /*
-     * Store the pending invitation.
-     */
     const { data: invite, error: inviteError } = await supabaseAdmin
       .from("enterprise_invites")
       .insert([
         {
           email,
-          company_id: resolvedCompanyId,
+          company_id: companyId,
           role: "member",
           token,
         },
@@ -141,22 +142,16 @@ export async function POST(req: Request) {
       );
     }
 
-    /*
-     * Send the real Supabase-managed invitation email.
-     *
-     * This preserves the behavior from your original file.
-     */
-    const { data, error } =
-      await supabaseAdmin.auth.admin.inviteUserByEmail(email);
+    const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(
+      email,
+      {
+        redirectTo: `${new URL(req.url).origin}/auth/confirm`,
+      },
+    );
 
     if (error) {
-      console.error("Invite error:", error);
+      console.error("Supabase invite error:", error);
 
-      /*
-       * If the actual Supabase invitation failed,
-       * remove the pending database invitation so we
-       * don't leave an unusable invite behind.
-       */
       await supabaseAdmin
         .from("enterprise_invites")
         .delete()
@@ -168,9 +163,6 @@ export async function POST(req: Request) {
       );
     }
 
-    /*
-     * Everything succeeded.
-     */
     return NextResponse.json({
       success: true,
       message: `Invite sent successfully to ${email}`,
@@ -184,7 +176,7 @@ export async function POST(req: Request) {
       },
     });
   } catch (err: any) {
-    console.error("Error sending invite:", err);
+    console.error("Error sending enterprise invite:", err);
 
     return NextResponse.json(
       {

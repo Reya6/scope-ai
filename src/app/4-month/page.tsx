@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import { initializePaddle, Paddle } from "@paddle/paddle-js";
@@ -59,9 +59,9 @@ export default function Payment4Month() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          userId: session.user.id,
           plan: "4-month",
         }),
       });

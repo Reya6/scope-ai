@@ -66,7 +66,6 @@ export default function Workstation() {
   // Invite modal (NEW, minimal and isolated)
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteCompanyId, setInviteCompanyId] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteMessage, setInviteMessage] = useState<string | null>(null);
   const [tokenInfo, setTokenInfo] = useState<{
@@ -402,67 +401,64 @@ export default function Workstation() {
       (s.persona ?? "").toLowerCase().includes(search.toLowerCase()),
   );
 
-  // ---------- Invite helpers (MINIMAL changes only) ----------
-  const openInvite = async () => {
+  // ---------- Invite helpers ----------
+  const openInvite = () => {
     setInviteMessage(null);
-    // attempt to prefill company id if we can (non-blocking)
-    try {
-      if (!supabase) {
-        // supabase not initialized client-side — skip session prefill
-      } else {
-        const sessionResp = await supabase.auth.getSession();
-        const user = sessionResp?.data?.session?.user;
-        if (user && user.id) {
-          // optionally we could fetch user's company from backend — skipping to keep minimal
-          // just prefill invited_by implicitly when sending (done in sendInvite server-side)
-        }
-      }
-    } catch {
-      // ignore
-    }
     setShowInvite(true);
   };
 
   const closeInvite = () => {
     setShowInvite(false);
     setInviteEmail("");
-    setInviteCompanyId("");
     setInviteLoading(false);
     setInviteMessage(null);
   };
 
   const sendInvite = async () => {
     setInviteMessage(null);
+
     if (!inviteEmail || !inviteEmail.includes("@")) {
       setInviteMessage("Enter a valid email address.");
       return;
     }
+
     setInviteLoading(true);
+
     try {
-      // try to get current user id if supabase client available; this is non-fatal if not present
-      let invited_by: string | null = null;
-      try {
-        if (supabase) {
-          const sessionResp = await supabase.auth.getSession();
-          invited_by = sessionResp?.data?.session?.user?.id ?? null;
-        }
-      } catch {
-        invited_by = null;
+      if (!supabase) {
+        setInviteMessage("Authentication is not available.");
+        setInviteLoading(false);
+        return;
       }
 
-      const payload: any = {
-        email: inviteEmail,
-      };
-      if (inviteCompanyId) payload.companyId = inviteCompanyId;
-      if (invited_by) payload.invitedBy = invited_by;
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      console.log(
+        "CURRENT AUTH USER:",
+        session?.user?.id,
+        session?.user?.email,
+      );
+
+      if (!session?.access_token) {
+        setInviteMessage("Please log in again before sending an invite.");
+        setInviteLoading(false);
+        return;
+      }
 
       const res = await fetch("/api/enterprise/invite", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          email: inviteEmail.trim(),
+        }),
       });
 
       const json = await res.json();
+
       if (!res.ok || json?.success === false) {
         const msg = json?.error ?? `Invite failed (${res.status})`;
         setInviteMessage(String(msg));
@@ -472,7 +468,7 @@ export default function Workstation() {
 
       setInviteMessage("Invite sent successfully.");
       setInviteLoading(false);
-      // keep modal open for review for short time, then close
+
       setTimeout(() => {
         closeInvite();
       }, 1400);
@@ -875,15 +871,6 @@ export default function Workstation() {
               placeholder="someone@example.com"
               className="w-full p-3 rounded border border-gray-300 mb-3 text-black"
               type="email"
-            />
-
-            <label className="block text-sm mb-1">Company ID (optional)</label>
-            <input
-              value={inviteCompanyId}
-              onChange={(e) => setInviteCompanyId(e.target.value)}
-              placeholder="company-id (optional)"
-              className="w-full p-3 rounded border border-gray-300 mb-3 text-black"
-              type="text"
             />
 
             {inviteMessage && (

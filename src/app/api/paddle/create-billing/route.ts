@@ -8,37 +8,61 @@ type Plan = (typeof VALID_PLANS)[number];
 
 export async function POST(request: Request) {
   try {
+    // Authenticate the real user from the Supabase access token.
+    const authorization = request.headers.get("Authorization");
+
+    if (!authorization?.startsWith("Bearer ")) {
+      return NextResponse.json(
+        { success: false, error: "Authentication required." },
+        { status: 401 },
+      );
+    }
+
+    const accessToken = authorization.replace("Bearer ", "");
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabaseAdmin.auth.getUser(accessToken);
+
+    if (userError || !user) {
+      return NextResponse.json(
+        { success: false, error: "Invalid authentication." },
+        { status: 401 },
+      );
+    }
+
     const body = await request.json();
 
-    const { userId, plan } = body as {
-      userId?: string;
+    const { plan } = body as {
       plan?: Plan;
     };
 
-    if (!userId || !plan || !VALID_PLANS.includes(plan)) {
+    if (!plan || !VALID_PLANS.includes(plan)) {
       return NextResponse.json(
-        { error: "Invalid user or plan" },
+        { success: false, error: "Invalid plan." },
         { status: 400 },
       );
     }
 
+    const userId = user.id;
     const priceId = PADDLE_PRICES[plan];
 
     if (!priceId) {
       return NextResponse.json(
-        { error: "Paddle price not configured" },
+        { success: false, error: "Paddle price not configured." },
         { status: 500 },
       );
     }
 
-    // Find the user's existing enterprise account
+    // Find the user's existing enterprise account.
     let { data: company, error: companyError } = await supabaseAdmin
       .from("enterprise_accounts")
       .select("id")
       .eq("owner_id", userId)
       .maybeSingle();
 
-    // Create one if it doesn't exist
+    // Create one if it doesn't exist.
     if (!company && !companyError) {
       const { data: newCompany, error: createError } = await supabaseAdmin
         .from("enterprise_accounts")
@@ -54,7 +78,7 @@ export async function POST(request: Request) {
         console.error("Failed to create enterprise account:", createError);
 
         return NextResponse.json(
-          { error: "Failed to create enterprise account" },
+          { success: false, error: "Failed to create enterprise account" },
           { status: 500 },
         );
       }
@@ -66,12 +90,12 @@ export async function POST(request: Request) {
       console.error("Failed to find enterprise account:", companyError);
 
       return NextResponse.json(
-        { error: "Failed to find enterprise account" },
+        { success: false, error: "Failed to find enterprise account" },
         { status: 500 },
       );
     }
 
-    // Check whether this company already has a billing record
+    // Check whether this company already has a billing record.
     const { data: existingBilling, error: existingBillingError } =
       await supabaseAdmin
         .from("billing_accounts")
@@ -86,12 +110,12 @@ export async function POST(request: Request) {
       );
 
       return NextResponse.json(
-        { error: "Failed to check billing account" },
+        { success: false, error: "Failed to check billing account" },
         { status: 500 },
       );
     }
 
-    // Update existing billing record or create a new one
+    // Update existing billing record or create a new one.
     let billing;
     let billingError;
 
@@ -132,16 +156,7 @@ export async function POST(request: Request) {
       console.error("Failed to create billing record:", billingError);
 
       return NextResponse.json(
-        { error: "Failed to create billing record" },
-        { status: 500 },
-      );
-    }
-
-    if (billingError) {
-      console.error("Failed to create billing record:", billingError);
-
-      return NextResponse.json(
-        { error: "Failed to create billing record" },
+        { success: false, error: "Failed to create billing record" },
         { status: 500 },
       );
     }
@@ -157,7 +172,7 @@ export async function POST(request: Request) {
     console.error("Billing create error:", error);
 
     return NextResponse.json(
-      { error: "Failed to prepare billing" },
+      { success: false, error: "Failed to prepare billing" },
       { status: 500 },
     );
   }
