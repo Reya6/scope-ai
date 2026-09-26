@@ -30,15 +30,14 @@ export async function POST(req: Request) {
 
     const { data: invite, error: inviteError } = await supabaseAdmin
       .from("enterprise_invites")
-      .select("id, email, company_id, role, expires_at")
+      .select("id, email, company_id, role, expires_at, accepted_at")
       .ilike("email", email)
+      .is("accepted_at", null)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (inviteError) {
-      console.error("Invite lookup error:", inviteError);
-
       return NextResponse.json(
         { success: false, error: "Unable to find your invitation." },
         { status: 500 }
@@ -47,17 +46,17 @@ export async function POST(req: Request) {
 
     if (!invite) {
       return NextResponse.json(
-        { success: false, error: "No enterprise invitation found for this email." },
+        { success: false, error: "No active invitation was found for this email." },
         { status: 404 }
       );
     }
 
     if (
       invite.expires_at &&
-      new Date(invite.expires_at).getTime() <= Date.now()
+      new Date(invite.expires_at).getTime() < Date.now()
     ) {
       return NextResponse.json(
-        { success: false, error: "This enterprise invitation has expired." },
+        { success: false, error: "This invitation has expired." },
         { status: 410 }
       );
     }
@@ -69,21 +68,16 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: existingMembership, error: membershipLookupError } =
+    const { data: existingMembership, error: membershipCheckError } =
       await supabaseAdmin
         .from("enterprise_users")
         .select("id, company_id, role")
         .eq("user_id", user.id)
         .maybeSingle();
 
-    if (membershipLookupError) {
-      console.error(
-        "Existing membership lookup error:",
-        membershipLookupError
-      );
-
+    if (membershipCheckError) {
       return NextResponse.json(
-        { success: false, error: "Unable to check your enterprise membership." },
+        { success: false, error: "Unable to verify your company membership." },
         { status: 500 }
       );
     }
@@ -93,54 +87,60 @@ export async function POST(req: Request) {
         return NextResponse.json({
           success: true,
           message: "You are already a member of this enterprise account.",
-          companyId: invite.company_id,
-          role: existingMembership.role,
         });
       }
 
       return NextResponse.json(
         {
           success: false,
-          error: "This account is already linked to another enterprise account.",
+          error: "Your account is already connected to another enterprise account.",
         },
         { status: 409 }
       );
     }
 
-    const { data: membership, error: membershipError } =
-      await supabaseAdmin
-        .from("enterprise_users")
-        .insert({
-          user_id: user.id,
-          company_id: invite.company_id,
-          role: invite.role || "member",
-        })
-        .select("id, user_id, company_id, role")
-        .single();
+    const { error: membershipError } = await supabaseAdmin
+      .from("enterprise_users")
+      .insert({
+        user_id: user.id,
+        company_id: invite.company_id,
+        role: invite.role || "member",
+      });
 
-    if (membershipError || !membership) {
-      console.error("Enterprise membership creation error:", membershipError);
-
+    if (membershipError) {
       return NextResponse.json(
-        { success: false, error: "Failed to join the enterprise account." },
+        { success: false, error: "Unable to add you to the enterprise account." },
+        { status: 500 }
+      );
+    }
+
+    const { error: acceptError } = await supabaseAdmin
+      .from("enterprise_invites")
+      .update({ accepted_at: new Date().toISOString() })
+      .eq("id", invite.id)
+      .is("accepted_at", null);
+
+    if (acceptError) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Membership was created, but the invitation could not be finalized.",
+        },
         { status: 500 }
       );
     }
 
     return NextResponse.json({
       success: true,
-      message: "You have joined the enterprise account successfully.",
-      companyId: membership.company_id,
-      role: membership.role,
+      message: "Invitation accepted successfully.",
+      companyId: invite.company_id,
+      role: invite.role || "member",
     });
-  } catch (error: any) {
-    console.error("Accept enterprise invite error:", error);
+  } catch (error) {
+    console.error("Accept invite error:", error);
 
     return NextResponse.json(
-      {
-        success: false,
-        error: error?.message ?? String(error),
-      },
+      { success: false, error: "Internal server error." },
       { status: 500 }
     );
   }
